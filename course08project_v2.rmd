@@ -1,0 +1,220 @@
+---
+output:
+  html_document: default
+  pdf_document: default
+---
+# Coursera / John Hopkins Data Science Specialization #
+    
+## Course 8 - Course Project ##
+    
+### Set working directory ###
+    
+### Set global parameters ###
+    
+```{r setoptions, echo=TRUE, cache=TRUE}
+require(knitr)
+opts_chunk$set(echo=TRUE)
+```
+
+## Analysis of "Weight Lifting Exercise" Dataset in R ##
+Author: LT
+
+### Executive Summary ###
+
+In this project, data from accelerometers on the belt, forearm, arm, and dumbell 
+of 6 participants were used to predict how well a barbell lift was performed. 
+The results were categorized into six classes, denoted by the "classe" variable.
+Due to the large number of variables in the original datasets, three models were
+selected - KNN, GBM and LDA. Training set modeling was then conducted with both 
+repeated 10-fold cross-validation and 10-fold cross-validation for performance
+comparisons. At the end, GBM with repeated 10-fold cross validation achieved 
+the highest accuracy of 98.82% and was selected as the final model for test 
+results prediction.
+
+### Training and Test Data ###
+
+```{r}
+train1 <- read.csv("https://d396qusza40orc.cloudfront.net/predmachlearn/pml-training.csv", header=TRUE, stringsAsFactors = TRUE)
+test1 <- read.csv("https://d396qusza40orc.cloudfront.net/predmachlearn/pml-testing.csv", header=TRUE, stringsAsFactors = TRUE)
+```
+
+### Exploratory Analysis ###
+
+```{r}
+# Extract high-level information of the datasets
+dim(train1); dim(test1)
+str(train1)
+head(train1)
+```
+
+The data contains a large number of variables (160 columns). 
+
+At an initial glance, the first few columns (1 to 5) are non-numeric referencing 
+usernames and various time stamps. These will unlikely correlate with the result
+variable (classe) and can be disregarded. 
+
+There are other variables with mostly NA entries (impossible for any form of 
+imputation) and potentially others with zero or nezr zero variances. All these 
+variables can be excluded from the model construction as well.
+
+### Cleaning Data ###
+```{r}
+# Libraries
+library(caret)
+# library(ggplot2)
+# library(randomForest)
+# library(RANN)
+# library(rattle)
+
+# Columns - Near zero variance
+nzv <- nearZeroVar(train1)
+train1_no_nzv <- train1[,-nzv]
+dim(train1_no_nzv) # 60 near-zero variance columns excluded
+
+# Columns - A lot of NA's
+colSums(is.na(train1_no_nzv)) 
+# Many columns contain 19216 NA entries out of 19622 observations (~98%)
+# We will disregard the ones with more than 95% NA entries
+na <- which(colSums(is.na(train1_no_nzv)) > nrow(train1_no_nzv)*0.95)
+train1_no_nzv_na <- train1_no_nzv[,-na]
+
+# Columns - User_name and time-stamps
+train1_clean <- train1_no_nzv_na[,-(1:5)]
+
+# Repeat the same to test dataset
+test1_no_nzv <- test1[,-nzv]
+test1_no_nzv_na <- test1_no_nzv[,-na]
+test1_clean <- test1_no_nzv_na[,-(1:5)]
+```
+
+### Model Construction ###
+
+From exploratory data analysis, the "classe" variable is a categorical variable
+with 6 outcome levels. Hence this is a classification problem rather than a
+regression problem. Testing metrics would include accuracy and Kappa. 
+
+Due to the large size of the training set, leave-one-out cross validation can be 
+too time and resource consuming. K-fold cross validation is more preferred over
+bootstrap resampling since bootstrap allows data re-selection. 
+
+For this assignment, model performance was compared between K-fold cross 
+validation (10 folds) andrepeated K-fold cross validation (10 folds and 10 
+repeats). Choice of models included tree-based Gradient Boost Machines (GBM), 
+linear-type Linear Discriminant Analysis (LDA) and non-linear K-Nearest 
+Neighbors (KNN) due to the very different mechanisms involved in each.
+
+For estimating out of sample error, we will reserve ~10% of the training set 
+data which will not be used towards models computation.
+
+```{r}
+# For reproducibility
+set.seed(123) 
+
+# Reserve 10% of training set data for out of sample error estimation
+inTrain = createDataPartition(train1_clean$classe, p = 0.9, list=FALSE)
+train1_clean_a = train1_clean[ inTrain,]
+train1_clean_b = train1_clean[-inTrain,]
+
+# Set up parallel processing for faster simulations
+library(parallel)
+library(doParallel)
+
+cluster <- makeCluster(detectCores() - 1) # Convention is to leave 1 core for OS
+registerDoParallel(cluster)
+
+# Set up control parameters for train function
+fitControl_rcv <- trainControl(## 10-fold repeated CV
+    method = "repeatedcv",
+    number = 10,
+    ## repeated ten times
+    repeats = 10,
+    verboseIter = TRUE,
+    allowParallel = TRUE)
+fitControl_cv <- trainControl(## 10-fold CV
+    method = "cv",
+    number = 10,
+    verboseIter = TRUE,
+    allowParallel = TRUE) 
+fitControl_cv_np <- trainControl(method = "cv",
+                                 number = 10,
+                                 verboseIter = TRUE)
+fitControl_rcv_np <- trainControl(method = "rcv",
+                                  number = 10,
+                                  repeats = 10,
+                                  verboseIter = TRUE)
+# Models
+# For some reasons, running "knn" models with parallel processing did not work.
+mod_knn_cv <- train(classe~., 
+                    data=train1_clean_a, 
+                    method="knn", 
+                    trControl = fitControl_cv_np,
+                    na.action = na.omit) # knn, 10-fold CV (k=5)
+# mod_knn_rcv <- train(classe~., 
+#                      data=train1_clean_a, 
+#                      method="knn", 
+#                      trControl = fitControl_rcv_np,
+#                      na.action = na.omit) # knn, 10-fold RCV (k=5)
+mod_gbm_cv <- train(classe~., 
+                    data=train1_clean_a, 
+                    method="gbm", 
+                    trControl = fitControl_cv,
+                    verbose = TRUE,
+                    na.action = na.omit) # gbm, 10-fold CV
+mod_gbm_rcv <- train(classe~., 
+                     data=train1_clean_a, 
+                     method="gbm", 
+                     trControl = fitControl_rcv,
+                     verbose = TRUE,
+                     na.action = na.omit) # gbm, 10-fold RCV
+mod_lda_cv <- train(classe~., 
+                    data=train1_clean_a, 
+                    method="lda", 
+                    trControl = fitControl_cv,
+                    verbose = TRUE,
+                    na.action = na.omit) # lda, 10-fold CV
+mod_lda_rcv <- train(classe~., 
+                     data=train1_clean_a, 
+                     method="lda", 
+                     trControl = fitControl_rcv,
+                     verbose = TRUE,
+                     na.action = na.omit) # lda, 10-fold RCV, accuracy = 71.3%
+
+# Predictions (estimating out-of-sample error)
+pred_gbm_rcv <- predict(mod_gbm_rcv, train1_clean_b[,-54]) # gbm, 10-fold RCV
+confusionMatrix(pred_gbm_rcv, train1_clean_b$classe)
+
+# Predictions (test set)
+pred_gbm_rcv <- predict(mod_gbm_rcv, test1_clean[,-54]) # gbm, 10-fold RCV
+
+# Shut down cluster
+stopCluster(cluster)
+
+mod_knn_cv
+mod_gbm_cv
+mod_gbm_rcv
+mod_lda_cv
+mod_lda_rcv
+
+pred_gbm_rcv
+```
+Accuracies for the models are as follows:
+KNN cross-validation = 93.23%
+KNN repeated cross-validation = N/A (KNN does not require repeated cross 
+                                     validation)
+GBM cross-validation = 98.81%
+GBM repeated cross-validation = 98.82%
+LDA cross-validation = 71.25%
+LDA repeated cross-validation = 71.29%
+    
+As a result of the highest accuracy, GBM repeated cross-validation model is 
+chosen to determine out of sample error and also to predict the value of 
+"classe" in the test set.
+
+From the confusion matrix, the out of sample error is 23 out of 1960 samples 
+with accuracy of 98.83%.
+
+The 20 test set predictions are:
+B A B A A E D B A A B C B A E E A B B B
+
+The above result have passed the project prediction quiz. 
+

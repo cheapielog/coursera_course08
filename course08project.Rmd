@@ -1,0 +1,253 @@
+---
+output:
+  html_document: default
+  pdf_document: default
+---
+#Coursera / John Hopkins Data Science Specialization#
+
+##Course 8 - Course Project##
+
+###Set working directory###
+
+###Set global parameters###
+
+```{r setoptions, echo=TRUE, cache=TRUE}
+require(knitr)
+opts_chunk$set(echo=TRUE)
+```
+
+
+##Analysis of "Weight Lifting Exercise" Dataset in R##
+Author: LT
+
+###Executive Summary###
+
+In this project, data from accelerometers on the belt, forearm, arm, and dumbell 
+of 6 participants were used to predict how well a barbell lift was performed. 
+The results were categorized into six classes, denoted by the "classe" variable.
+Due to the large number of variables in the original datasets, three models were
+selected - KNN, GBM and LDA. Training set modeling was then conducted with both 
+repeated 10-fold cross-validation and 10-fold cross-validation for performance
+comparisons. At the end, GBM with repeated 10-fold cross validation achieved 
+the highest accuracy of 98.95% and was selected as the final model for test 
+results prediction.
+
+###Training and Test Data###
+
+```{r}
+train1 <- read.csv("https://d396qusza40orc.cloudfront.net/predmachlearn/pml-training.csv", header=TRUE, stringsAsFactors = TRUE)
+test1 <- read.csv("https://d396qusza40orc.cloudfront.net/predmachlearn/pml-testing.csv", header=TRUE, stringsAsFactors = TRUE)
+```
+
+###Exploratory Analysis###
+
+```{r}
+# Extract high-level information of the datasets
+dim(train1); dim(test1)
+str(train1)
+head(train1)
+```
+
+The data contains a large number of variables (160 columns). 
+
+At an initial glance, the first few columns (1 to 5) are non-numeric referencing 
+usernames and various time stamps. These will unlikely correlate with the result
+variable (classe) and can be disregarded. 
+
+There are other variables with mostly NA entries (impossible for any form of 
+imputation) and potentially others with zero or nezr zero variances. All these 
+variables can be excluded from the model construction as well.
+
+###Cleaning Data###
+```{r}
+# Libraries
+library(caret)
+# library(ggplot2)
+# library(randomForest)
+# library(RANN)
+# library(rattle)
+
+# Columns - Near zero variance
+nzv <- nearZeroVar(train1)
+train1_no_nzv <- train1[,-nzv]
+dim(train1_no_nzv) # 60 near-zero variance columns excluded
+
+# Columns - A lot of NA's
+colSums(is.na(train1_no_nzv)) 
+# Many columns contain 19216 NA entries out of 19622 observations (~98%)
+# We will disregard the ones with more than 95% NA entries
+na <- which(colSums(is.na(train1_no_nzv)) > nrow(train1_no_nzv)*0.95)
+train1_no_nzv_na <- train1_no_nzv[,-na]
+
+# Columns - User_name and time-stamps
+train1_clean <- train1_no_nzv_na[,-(1:5)]
+
+# Repeat the same to test dataset
+test1_no_nzv <- test1[,-nzv]
+test1_no_nzv_na <- test1_no_nzv[,-na]
+test1_clean <- test1_no_nzv_na[,-(1:5)]
+```
+
+###Model Construction###
+
+From exploratory data analysis, the "classe" variable is a categorical variable
+with 6 outcome levels. Hence this is a classification problem rather than a
+regression problem. Testing metrics would include accuracy and Kappa. 
+
+Due to the large size of the training set, leave-one-out cross validation can be 
+too time and resource consuming. K-fold cross validation is more preferred over
+bootstrap resampling since bootstrap allows data re-selection. 
+
+For this assignment, model performance was compared between K-fold cross 
+validation (10 folds) andrepeated K-fold cross validation (10 folds and 10 
+repeats). Choice of models included tree-based Gradient Boost Machines (GBM), 
+linear-type Linear Discriminant Analysis (LDA) and non-linear K-Nearest 
+Neighbors (KNN) due to the very different mechanisms involved in each.
+
+
+
+2) Out of sample error - Confusion Matrix and measures
+
+```{r}
+
+# Set up parallel processing for faster simulations
+library(parallel)
+library(doParallel)
+
+cluster <- makeCluster(detectCores() - 1) # Convention is to leave 1 core for OS
+registerDoParallel(cluster)
+
+set.seed(123) # For reproducibility
+
+# Set up control parameters for train function
+fitControl_rcv <- trainControl(## 10-fold repeated CV
+                           method = "repeatedcv",
+                           number = 10,
+                           ## repeated ten times
+                           repeats = 10,
+                           verboseIter = TRUE,
+                           allowParallel = TRUE)
+fitControl_cv <- trainControl(## 10-fold CV
+                           method = "cv",
+                           number = 10,
+                           verboseIter = TRUE,
+                           allowParallel = TRUE) 
+fitControl_cv_np <- trainControl(method = "cv",
+                           number = 10,
+                           verboseIter = TRUE)
+fitControl_rcv_np <- trainControl(method = "rcv",
+                           number = 10,
+                           repeats = 10,
+                           verboseIter = TRUE)
+# Models
+# For some reasons, running "knn" models with parallel processing did not work.
+mod_knn_cv <- train(classe~., 
+                data=train1_clean, 
+                method="knn", 
+                trControl = fitControl_cv_np,
+                na.action = na.omit) # knn, 10-fold CV, accuracy = 93.7% (k=5)
+mod_knn_rcv <- train(classe~., 
+                data=train1_clean, 
+                method="knn", 
+                trControl = fitControl_rcv_np,
+                na.action = na.omit) # knn, 10-fold RCV, accuracy = 93.8% (k=5)
+mod_gbm_cv <- train(classe~., 
+                data=train1_clean, 
+                method="gbm", 
+                trControl = fitControl_cv,
+                verbose = TRUE,
+                na.action = na.omit) # gbm, 10-fold CV, accuracy = 98.9%
+mod_gbm_rcv <- train(classe~., 
+                data=train1_clean, 
+                method="gbm", 
+                trControl = fitControl_rcv,
+                verbose = TRUE,
+                na.action = na.omit) # gbm, 10-fold RCV, accuracy = 98.9%
+mod_lda_cv <- train(classe~., 
+                data=train1_clean, 
+                method="lda", 
+                trControl = fitControl_cv,
+                verbose = TRUE,
+                na.action = na.omit) # lda, 10-fold CV, accuracy = 71.2%
+mod_lda_rcv <- train(classe~., 
+                data=train1_clean, 
+                method="lda", 
+                trControl = fitControl_rcv,
+                verbose = TRUE,
+                na.action = na.omit) # lda, 10-fold RCV, accuracy = 71.3%
+
+# Predictions
+confusionMatrix(pred_gbm_rcv_train, train1$classe)
+postResample(predict(mod_gbm_rcv, train1_clean[,-54]), train1$classe)
+postResample(predict(mod_lda_rcv, train1_clean[,-54]), train1$classe)
+postResample(predict(mod_knn_rcv, train1_clean[,-54]), train1$classe)
+
+pred_gbm_cv <- predict(mod_gbm_cv, test1_clean[,-54]) # gbm, 10-fold CV
+pred_lda_cv <- predict(mod_lda_cv, test1_clean[,-54]) # lda, 10-fold CV
+pred_gbm_rcv <- predict(mod_gbm_rcv, test1_clean[,-54]) # gbm, 10-fold RCV
+pred_lda_rcv <- predict(mod_lda_rcv, test1_clean[,-54]) # lda, 10-fold RCV
+
+pred_gbm_cv
+pred_gbm_rcv
+pred_lda_cv
+pred_lda_rcv
+
+
+# Shut down cluster
+stopCluster(cluster)
+
+#confusionMatrix(predfit, test1$classe)
+
+```
+
+
+```{r}
+
+```
+
+```{r}
+
+```
+
+```{r}
+
+```
+
+###Appendix###
+
+Figure 1 - Receiver Operating Characteristic (ROC):
+
+```{r}
+boxplot(mpg~am,
+        data = mtcars,
+        xlab = "Transmission Type", 
+        ylab = "Miles per Gallon (MPG)", 
+        main="Miles per US Gallon (MPG) Comparison between Automatic (Left) and 
+        Manual Transmission (Right)")
+```
+
+Figure 2 - Residual Plots (from Final Fit):
+
+```{r}
+par(mfrow = c(2, 2))
+plot(final_fit)
+```
+
+Figure 3 - Relationship between MPG with Other Variables (Grouped by 
+Transmission Type):
+
+```{r}
+par(mfrow = c(2, 2))
+with(mtcars,
+{
+    plot(cyl, mpg, pch=16, col=factor(am))
+    legend("topright", legend=c("Auto","Manual"), pch=16, col=c(1:2))
+    plot(disp, mpg, pch=16, col=factor(am))
+    legend("topright", legend=c("Auto","Manual"), pch=16, col=c(1:2))
+    plot(hp, mpg, pch=16, col=factor(am))
+    legend("topright", legend=c("Auto","Manual"), pch=16, col=c(1:2))
+    plot(wt, mpg, pch=16, col=factor(am))
+    legend("topright", legend=c("Auto","Manual"), pch=16, col=c(1:2))
+}
+)
+```
